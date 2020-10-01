@@ -1,67 +1,87 @@
-/**
+/*
  * Part of WinLamb - Win32 API Lambda Library
  * https://github.com/rodrigocfd/winlamb
- * Copyright 2017-present Rodrigo Cesar de Freitas Dias
- * This library is released under the MIT License
+ * This library is released under the MIT License.
  */
 
 #pragma once
-#include <string>
+#include <stdexcept>
+#include <string_view>
 #include <Windows.h>
 #include <OleAuto.h>
+#include "../str.h"
 
-namespace wl {
+namespace wl::com {
 
-// Wrappers to COM objects.
-namespace com {
-
-// Wrapper to BSTR string, used with COM.
+/// Manages a COM BSTR string.
+/// @see https://docs.microsoft.com/en-us/previous-versions/windows/desktop/automat/bstr
 class bstr final {
 private:
-	BSTR _bstrObj = nullptr;
+	BSTR _bstr = nullptr;
 
 public:
-	~bstr() {
-		this->free();
-	}
+	/// Destructor. Calls free().
+	~bstr() { this->free(); }
 
+	/// Default constructor.
 	bstr() = default;
-	bstr(bstr&& other) noexcept          : _bstrObj{other._bstrObj} { other._bstrObj = nullptr; }
-	bstr(const wchar_t* s) noexcept      : _bstrObj{SysAllocString(s)} { }
-	bstr(const std::wstring& s) noexcept : bstr(s.c_str()) { }
 
-	operator const BSTR&() const noexcept  { return this->_bstrObj; }
-	const BSTR* operator&() const noexcept { return &this->_bstrObj; }
-	BSTR* operator&() noexcept             { return &this->_bstrObj; }
+	/// Move constructor.
+	bstr(bstr&& other) noexcept { this->operator=(std::move(other)); }
 
-	bstr& operator=(bstr&& other) noexcept {
+	/// Constructor.
+	/// Creates a copy of the string with SysAllocString().
+	/// @see https://docs.microsoft.com/en-us/windows/win32/api/oleauto/nf-oleauto-sysallocstring
+	bstr(std::wstring_view s) { this->operator=(s); }
+
+	/// Automatic conversion to BSTR& type.
+	[[nodiscard]] operator const BSTR&() const noexcept { return this->_bstr; }
+
+	/// Returns the underlying BSTR pointer.
+	[[nodiscard]] const BSTR* operator&() const noexcept { return &this->_bstr; }
+	/// Returns the underlying BSTR pointer.
+	[[nodiscard]] BSTR*       operator&() noexcept       { return &this->_bstr; }
+
+	/// Move assignment operator.
+	bstr& operator=(bstr&& other) noexcept
+	{
 		this->free();
-		std::swap(this->_bstrObj, other._bstrObj);
+		std::swap(this->_bstr, other._bstr);
 		return *this;
 	}
-	
-	bstr& operator=(const wchar_t* s) noexcept {
+
+	/// Assignment operator.
+	/// Creates a copy of the string with SysAllocString().
+	/// @see https://docs.microsoft.com/en-us/windows/win32/api/oleauto/nf-oleauto-sysallocstring
+	bstr& operator=(std::wstring_view s)
+	{
 		this->free();
-		this->_bstrObj = SysAllocString(s);
-		return *this;
-	}
 
-	bstr& operator=(const std::wstring& s) noexcept {
-		return this->operator=(s.c_str());
-	}
+		if (!s.empty()) {
+			this->_bstr = SysAllocString(s.data());
 
-	bstr& free() noexcept {
-		if (this->_bstrObj) {
-			SysFreeString(this->_bstrObj);
-			this->_bstrObj = nullptr;
+			if (!this->_bstr) {
+				throw std::runtime_error(
+					str::unicode_to_ansi(
+						str::format(L"SysAllocString failed \"%s\".", s) ));
+			}
 		}
+		
 		return *this;
 	}
 
-	const wchar_t* c_str() const noexcept {
-		return static_cast<wchar_t*>(this->_bstrObj);
+	/// Converts the BSTR into const wchar_t*.
+	[[nodiscard]] const wchar_t* c_str() const noexcept { return static_cast<const wchar_t*>(this->_bstr); }
+
+	/// Calls SysFreeString().
+	/// @see https://docs.microsoft.com/en-us/windows/win32/api/oleauto/nf-oleauto-sysfreestring
+	void free() noexcept
+	{
+		if (this->_bstr) {
+			SysFreeString(this->_bstr);
+			this->_bstr = nullptr;
+		}
 	}
 };
 
-}//namespace com
-}//namespace wl
+}//namespace wl::com

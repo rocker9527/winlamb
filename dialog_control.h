@@ -1,89 +1,111 @@
-/**
+/*
  * Part of WinLamb - Win32 API Lambda Library
  * https://github.com/rodrigocfd/winlamb
- * Copyright 2017-present Rodrigo Cesar de Freitas Dias
- * This library is released under the MIT License
+ * This library is released under the MIT License.
  */
 
 #pragma once
+#include <Windows.h>
 #include "internals/base_dialog.h"
-#include "internals/base_msg_pubm.h"
-#include "internals/base_thread_pubm.h"
-#include "internals/base_user_ctrl.h"
-#include "internals/styler.h"
-#include "wnd.h"
+#include "internals/control_visuals.h"
+#include "internals/interfaces.h"
 
 namespace wl {
 
-// Inherit from this class to have a dialog to be used as a control within a parent window.
-class dialog_control :
-	public wnd,
-	public _wli::base_msg_pubm<INT_PTR>,
-	public _wli::base_thread_pubm<INT_PTR, TRUE>
-{
+/// Custom dialog-based user control.
+/// Allows message and notification handling.
+///
+/// You must set these styles in the resource editor:
+/// - Border: none
+/// - Control: true
+/// - Style: child
+/// - Visible: true (otherwise will start invisible)
+/// - Client Edge: true (only if you want a border)
+///
+/// Default handled messages:
+/// - WM_NCPAINT
+class dialog_control : public i_control {
+public:
+	/// Setup options for dialog_control.
+	struct setup_opts final {
+		/// Resource dialog ID, must be set.
+		/// @see https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createdialogparamw
+		int dialog_id = 0;
+	};
+
 private:
-	HWND                                _hWnd = nullptr;
-	_wli::base_msg<INT_PTR>             _baseMsg{_hWnd};
-	_wli::base_thread<INT_PTR, TRUE>    _baseThread{_baseMsg};
-	_wli::base_dialog                   _baseDialog{_hWnd, _baseMsg};
-	_wli::base_user_ctrl<INT_PTR, TRUE> _baseUserCtrl{_baseMsg};
+	setup_opts _setup;
+	_wli::base_dialog _base;
 
 public:
-	// Defines window creation parameters.
-	_wli::base_dialog::setup_vars setup;
+	/// Default constructor.
+	dialog_control()
+	{
+		this->_default_msg_handlers();
+	}
 
-	// Wraps window style changes done by Get/SetWindowLongPtr.
-	_wli::styler<dialog_control> style{this};
-
-protected:
-	dialog_control() :
-		wnd(_hWnd), base_msg_pubm(_baseMsg), base_thread_pubm(_baseThread) { }
-
-public:
+	/// Move constructor.
 	dialog_control(dialog_control&&) = default;
-	dialog_control& operator=(dialog_control&&) = default; // movable only
 
-	// Returns the control ID.
-	int ctrl_id() const noexcept {
-		return GetDlgCtrlID(this->_hWnd);
+	/// Move assignment operator.
+	dialog_control& operator=(dialog_control&&) = default;
+
+	/// Exposes variables that will be used during dialog creation.
+	[[nodiscard]] setup_opts& setup()
+	{
+		if (this->hwnd()) {
+			throw std::logic_error("Cannot call setup() after dialog_control is created.");
+		}
+		return this->_setup;
 	}
 
-	// Creates the control dialog, returning immediately.
-	void create(HWND hParent, int ctrlId, POINT position, SIZE size) {
-		// Dialog styles to be set on the resource editor:
-		// - Border: none
-		// - Control: true
-		// - Style: child
-		// - Visible: true (otherwise will start invisible)
-		// - Client Edge: true (if you want a border, will add WS_EX_CLIENTEDGE)
-
-		this->_check_bad_styles();
-
-		if (!this->_baseDialog.create_dialog_param(this->setup, hParent)) {
-			throw std::system_error(GetLastError(), std::system_category(),
-				"CreateDialogParam failed for control dialog");
+	/// Creates the dialog control.
+	/// Should be called during parent's WM_CREATE processing (or if dialog, WM_INITDIALOG).
+	/// A size of {0, 0} will use the size defined in the dialog resource.
+	/// Position and size will be adjusted to match current system DPI.
+	/// @see https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createdialogparamw
+	/// @see https://docs.microsoft.com/en-us/windows/win32/winmsg/wm-create
+	/// @see https://docs.microsoft.com/en-us/windows/win32/dlgbox/wm-initdialog
+	void create(const i_window* parent, int id, POINT pos, SIZE size = {0, 0})
+	{
+		if (!parent) {
+			throw std::invalid_argument("No parent passed to dialog_control::create().");
 		}
 
-		SetWindowLongPtrW(this->_hWnd, GWLP_ID, ctrlId); // so the control has an ID
-		SetWindowPos(this->_hWnd, nullptr,
-			position.x, position.y,
-			size.cx, size.cy, SWP_NOZORDER);
+		HINSTANCE hInst = reinterpret_cast<HINSTANCE>(
+			GetWindowLongPtrW(parent->hwnd(), GWLP_HINSTANCE));
+		this->_base.create_dialog_param(hInst, parent, this->_setup.dialog_id);
+
+		SetWindowLongPtrW(this->hwnd(), GWLP_ID, id); // so the control has an ID
+
+		bool useResourceSize = !size.cx && !size.cy;
+		SetWindowPos(this->hwnd(), nullptr, pos.x, pos.y, size.cx, size.cy,
+			SWP_NOZORDER | (useResourceSize ? SWP_NOSIZE : 0));
 	}
 
-	// Creates the control dialog, returning immediately.
-	void create(const wnd* parent, int ctrlId, POINT position, SIZE size) {
-		this->create(parent->hwnd(), ctrlId, position, size);
-	}
+	/// Exposes methods to add message handlers.
+	[[nodiscard]] _wli::msg_proxy_all& on_msg() { return this->_base.on_msg(); }
+
+	/// Executes a function asynchronously, in a new detached background thread.
+	/// @tparam F std::function<void()>
+	/// @param func [](ui_work ui) {}
+	template<typename F>
+	void background_work(F&& func) { this->_base.background_work(std::move(func)); }
+
+	/// Returns the underlying HWND handle.
+	[[nodiscard]] HWND hwnd() const noexcept override { return this->_base.hwnd(); }
+
+	/// Retrieves the control ID.
+	/// @see https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdlgctrlid
+	[[nodiscard]] int id() const noexcept override { return GetDlgCtrlID(this->hwnd()); }
 
 private:
-	void _check_bad_styles() const {
-		if (!this->style.has_style(DS_CONTROL)) {
-			// https://blogs.msdn.microsoft.com/oldnewthing/20040730-00/?p=38293
-			throw std::logic_error("Control dialog template doesn't have DS_CONTROL style.");
-		}
-		if (!this->style.has_style(WS_CHILD)) {
-			throw std::logic_error("Control dialog template doesn't have WS_CHILD style.");
-		}
+	void _default_msg_handlers()
+	{
+		this->on_msg().wm_nc_paint([this](msg::wm_nc_paint p) noexcept
+		{
+			_wli::paint_control_borders(this->hwnd(), p.wparam, p.lparam);
+		});
 	}
 };
 
